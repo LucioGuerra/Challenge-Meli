@@ -1,0 +1,60 @@
+spring:
+  application:
+    name: challenge-meli
+  threads:
+    virtual:
+      enabled: true  # Java 21 Virtual Threads
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  port: ${SERVER_PORT:8080}
+
+# Actuator → expose at root with custom paths.
+# /health, /health/live, /health/ready, /metrics (Prometheus format).
+management:
+  endpoints:
+    web:
+      base-path: /
+      exposure:
+        include: health, prometheus
+      path-mapping:
+        prometheus: metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when-authorized
+      roles: MONITORING
+      group:
+        live:
+          include: livenessState
+        ready:
+          include: readinessState, argoCd, prometheus, alertmanager
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${ENVIRONMENT:local}
+
+api:
+  security:
+    username: ${API_USERNAME:admin}
+    password: ${API_PASSWORD:changeme}
+    monitoring-username: ${MONITORING_USERNAME:prometheus}
+    monitoring-password: ${MONITORING_PASSWORD:prom-secret}
+  pagination:
+    default-size: ${API_PAGE_DEFAULT_SIZE:20}
+
+clients:
+  prometheus:
+    url: ${PROMETHEUS_URL:https://prometheus.mock.meli/api/v1}
+  argocd:
+    url: ${ARGOCD_URL:https://argocd.mock.meli/api/v1}
+  alertmanager:
+    url: ${ALERTMANAGER_URL:https://alertmanager.mock.meli/api/v2}
+
+logging:
+  level:
+    root: INFO
+    com.meli.challenge: ${LOG_LEVEL:DEBUG}

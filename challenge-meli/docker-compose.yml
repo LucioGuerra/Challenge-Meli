@@ -1,0 +1,30 @@
+services:
+  challenge-meli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: challenge-meli:dev
+    container_name: challenge-meli
+    env_file: .env
+    ports:
+      - "${SERVER_PORT:-8080}:${SERVER_PORT:-8080}"
+    environment:
+      SERVER_PORT:           ${SERVER_PORT:-8080}
+      ENVIRONMENT:           ${ENVIRONMENT:-local}
+      API_USERNAME:          ${API_USERNAME:-admin}
+      API_PASSWORD:          ${API_PASSWORD:-changeme}
+      MONITORING_USERNAME:   ${MONITORING_USERNAME:-prometheus}
+      MONITORING_PASSWORD:   ${MONITORING_PASSWORD:-prom-secret}
+      PROMETHEUS_URL:        ${PROMETHEUS_URL:-https://prometheus.mock.meli/api/v1}
+      ARGOCD_URL:            ${ARGOCD_URL:-https://argocd.mock.meli/api/v1}
+      ALERTMANAGER_URL:      ${ALERTMANAGER_URL:-https://alertmanager.mock.meli/api/v2}
+      API_PAGE_DEFAULT_SIZE: ${API_PAGE_DEFAULT_SIZE:-20}
+      LOG_LEVEL:             ${LOG_LEVEL:-DEBUG}
+      JVM_OPTS:              ${JVM_OPTS:--XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:InitialRAMPercentage=50.0 -XX:+UseZGC -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom -Djava.net.preferIPv4Stack=true -Dfile.encoding=UTF-8}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:${SERVER_PORT:-8080}/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    restart: unless-stopped
