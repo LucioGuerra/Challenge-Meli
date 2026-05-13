@@ -1,0 +1,93 @@
+fullnameOverride: grafana
+
+replicas: 2
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+persistence:
+  enabled: true
+  storageClassName: gp3
+  size: 10Gi
+  accessModes:
+    - ReadWriteOnce
+
+admin:
+  existingSecret: grafana-admin
+  userKey: admin-user
+  passwordKey: admin-password
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: true
+  ingressClassName: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/certificate-arn: PLACEHOLDER_ACM_CERT_ARN
+    alb.ingress.kubernetes.io/ssl-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
+    alb.ingress.kubernetes.io/healthcheck-path: /api/health
+  hosts:
+    - grafana.PLACEHOLDER_BASE_DOMAIN
+  path: /
+  pathType: Prefix
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://prometheus-operated.monitoring.svc:9090
+        access: proxy
+        isDefault: true
+        jsonData:
+          timeInterval: 30s
+      - name: Loki
+        type: loki
+        url: http://loki-gateway.monitoring.svc
+        access: proxy
+        jsonData:
+          maxLines: 5000
+
+sidecar:
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    searchNamespace: ALL
+    folderAnnotation: grafana_folder
+    provider:
+      foldersFromFilesStructure: true
+  datasources:
+    enabled: true
+    label: grafana_datasource
+  alerts:
+    enabled: false
+
+serviceMonitor:
+  enabled: true
+
+grafana.ini:
+  server:
+    root_url: https://grafana.PLACEHOLDER_BASE_DOMAIN
+  analytics:
+    reporting_enabled: false
+    check_for_updates: false
+  security:
+    cookie_secure: true
+    strict_transport_security: true
+  log:
+    mode: console
+    level: info
+  log.console:
+    format: json

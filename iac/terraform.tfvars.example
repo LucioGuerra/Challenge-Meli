@@ -1,0 +1,24 @@
+region              = "us-east-1"
+environment         = "prod"
+cluster_name        = "meli-devops-api"
+kubernetes_version  = "1.31"
+
+base_domain         = "PLACEHOLDER_BASE_DOMAIN"
+
+github_repo             = "PLACEHOLDER_ORG/PLACEHOLDER_REPO"
+github_branch           = "main"
+codestar_connection_arn = "arn:aws:codestar-connections:us-east-1:PLACEHOLDER_ACCOUNT:connection/PLACEHOLDER_UUID"
+
+manifest_repo = "PLACEHOLDER_ORG/PLACEHOLDER_MANIFEST_REPO"
+
+alerts_email        = "PLACEHOLDER_ALERTS@example.com"
+approval_test_email = "PLACEHOLDER_APPROVE_TEST@example.com"
+approval_prod_email = "PLACEHOLDER_APPROVE_PROD@example.com"
+
+tags = {
+  Project     = "meli-devops-api"
+  Environment = "prod"
+  ManagedBy   = "terraform"
+  Owner       = "devops-team"
+  CostCenter  = "engineering"
+}

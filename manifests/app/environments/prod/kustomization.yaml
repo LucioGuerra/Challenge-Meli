@@ -1,0 +1,52 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: challenge-meli
+
+resources:
+  - ../../base
+
+configMapGenerator:
+  - name: challenge-meli-api-env
+    behavior: create
+    envs:
+      - values.yaml
+
+replicas:
+  - name: challenge-meli-api
+    count: 3
+
+images:
+  - name: challenge-meli-api
+    newName: PLACEHOLDER_ECR_REGISTRY/challenge-meli-api
+    newTag: PLACEHOLDER_PROD_TAG
+
+patches:
+  - target:
+      group: argoproj.io
+      version: v1alpha1
+      kind: Rollout
+      name: challenge-meli-api
+    patch: |-
+      - op: replace
+        path: /spec/strategy/blueGreen/autoPromotionEnabled
+        value: true
+  - target:
+      kind: Ingress
+      name: challenge-meli-api
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: api.challenge-meli.PLACEHOLDER_BASE_DOMAIN
+      - op: replace
+        path: /metadata/annotations/alb.ingress.kubernetes.io~1scheme
+        value: internet-facing
+      - op: replace
+        path: /metadata/annotations/alb.ingress.kubernetes.io~1certificate-arn
+        value: PLACEHOLDER_PROD_ACM_CERT_ARN
+  - target:
+      kind: ExternalSecret
+      name: challenge-meli-api-secrets
+    patch: |-
+      - op: replace
+        path: /spec/dataFrom/0/extract/key
+        value: /meli/prod/challenge-meli-api

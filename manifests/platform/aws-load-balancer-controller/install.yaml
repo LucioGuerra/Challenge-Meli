@@ -1,0 +1,60 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: aws-load-balancer-controller
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://aws.github.io/eks-charts
+    chart: aws-load-balancer-controller
+    targetRevision: 1.8.1
+    helm:
+      releaseName: aws-load-balancer-controller
+      values: |
+        clusterName: PLACEHOLDER_EKS_CLUSTER_NAME
+        region: PLACEHOLDER_AWS_REGION
+        vpcId: PLACEHOLDER_VPC_ID
+        replicaCount: 2
+        serviceAccount:
+          create: true
+          name: aws-load-balancer-controller
+          annotations:
+            eks.amazonaws.com/role-arn: PLACEHOLDER_LBC_IRSA_ROLE_ARN
+        resources:
+          requests:
+            cpu: 100m
+            memory: 200Mi
+          limits:
+            cpu: 200m
+            memory: 500Mi
+        podDisruptionBudget:
+          maxUnavailable: 1
+        enableServiceMutatorWebhook: false
+        enableShield: false
+        enableWaf: false
+        enableWafv2: false
+        defaultTags:
+          managed-by: argocd
+          stack: platform
+        metrics:
+          serviceMonitor:
+            enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m

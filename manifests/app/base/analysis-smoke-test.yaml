@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: challenge-meli-api-smoke-test
+  namespace: challenge-meli
+  labels:
+    app.kubernetes.io/name: challenge-meli-api
+    app.kubernetes.io/part-of: challenge-meli
+spec:
+  args:
+    - name: preview-service
+  metrics:
+    - name: ready-probe
+      count: 3
+      interval: 10s
+      failureLimit: 1
+      successCondition: result == "UP"
+      provider:
+        web:
+          url: "http://{{args.preview-service}}.challenge-meli.svc.cluster.local/health/ready"
+          method: GET
+          timeoutSeconds: 5
+          jsonPath: "{$.status}"

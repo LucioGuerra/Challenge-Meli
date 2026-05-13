@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: challenge-meli-api-active
+  namespace: challenge-meli
+  labels:
+    app.kubernetes.io/name: challenge-meli-api
+    app.kubernetes.io/component: active
+    app.kubernetes.io/part-of: challenge-meli
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: challenge-meli-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+    - name: metrics
+      port: 8080
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: challenge-meli-api-preview
+  namespace: challenge-meli
+  labels:
+    app.kubernetes.io/name: challenge-meli-api
+    app.kubernetes.io/component: preview
+    app.kubernetes.io/part-of: challenge-meli
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: challenge-meli-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: challenge-meli-api
+  namespace: challenge-meli
+  labels:
+    app.kubernetes.io/name: challenge-meli-api
+    app.kubernetes.io/part-of: challenge-meli
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: challenge-meli-api
+      app.kubernetes.io/component: active
+  namespaceSelector:
+    matchNames:
+      - challenge-meli
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      scheme: http
+      basicAuth:
+        username:
+          name: challenge-meli-api-secrets
+          key: MONITORING_USERNAME
+        password:
+          name: challenge-meli-api-secrets
+          key: MONITORING_PASSWORD

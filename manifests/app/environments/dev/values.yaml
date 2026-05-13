@@ -1,0 +1,6 @@
+ENVIRONMENT=dev
+LOG_LEVEL=DEBUG
+API_PAGE_DEFAULT_SIZE=20
+PROMETHEUS_URL=http://prometheus.monitoring.svc:9090/api/v1
+ARGOCD_URL=http://argocd-server.argocd.svc/api/v1
+ALERTMANAGER_URL=http://alertmanager-operated.monitoring.svc:9093/api/v2

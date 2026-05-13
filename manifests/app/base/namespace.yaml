@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: challenge-meli
+  labels:
+    name: challenge-meli
+    app.kubernetes.io/part-of: challenge-meli
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: challenge-meli-api
+  namespace: challenge-meli
+  labels:
+    app.kubernetes.io/name: challenge-meli-api
+    app.kubernetes.io/part-of: challenge-meli
+automountServiceAccountToken: false

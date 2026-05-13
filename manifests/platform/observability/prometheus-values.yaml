@@ -1,0 +1,142 @@
+fullnameOverride: prometheus
+
+defaultRules:
+  create: true
+  rules:
+    alertmanager: true
+    etcd: true
+    general: true
+    k8s: true
+    kubeApiserver: true
+    kubeApiserverAvailability: true
+    kubeApiserverSlos: true
+    kubelet: true
+    kubeProxy: true
+    kubePrometheusGeneral: true
+    kubePrometheusNodeRecording: true
+    kubernetesApps: true
+    kubernetesResources: true
+    kubernetesStorage: true
+    kubernetesSystem: true
+    network: true
+    node: true
+    nodeExporterAlerting: true
+    nodeExporterRecording: true
+    prometheus: true
+    prometheusOperator: true
+
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+  config:
+    route:
+      group_by: ["alertname", "namespace", "severity"]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      receiver: default
+      routes:
+        - matchers:
+            - severity = "critical"
+          receiver: critical
+          continue: true
+        - matchers:
+            - alertname = "Watchdog"
+          receiver: "null"
+    receivers:
+      - name: "null"
+      - name: default
+        email_configs:
+          - to: PLACEHOLDER_ALERTS_EMAIL
+            from: PLACEHOLDER_SMTP_FROM
+            smarthost: PLACEHOLDER_SMTP_HOST:587
+            auth_username: PLACEHOLDER_SMTP_USER
+            auth_password: PLACEHOLDER_SMTP_PASSWORD
+            send_resolved: true
+      - name: critical
+        email_configs:
+          - to: PLACEHOLDER_ALERTS_EMAIL
+            from: PLACEHOLDER_SMTP_FROM
+            smarthost: PLACEHOLDER_SMTP_HOST:587
+            auth_username: PLACEHOLDER_SMTP_USER
+            auth_password: PLACEHOLDER_SMTP_PASSWORD
+            send_resolved: true
+    inhibit_rules:
+      - source_matchers: [severity = "critical"]
+        target_matchers: [severity = "warning"]
+        equal: [alertname, namespace]
+
+grafana:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    replicas: 2
+    retention: 15d
+    retentionSize: 45GB
+    resources:
+      requests:
+        cpu: 500m
+        memory: 2Gi
+      limits:
+        cpu: 2
+        memory: 4Gi
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 50Gi
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    enableAdminAPI: false
+    walCompression: true
+    podMetadata:
+      labels:
+        app.kubernetes.io/part-of: observability
+    additionalScrapeConfigs: []
+
+nodeExporter:
+  enabled: true
+
+kube-state-metrics:
+  enabled: true
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  admissionWebhooks:
+    enabled: true
+    patch:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 100m
+          memory: 128Mi

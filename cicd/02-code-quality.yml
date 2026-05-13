@@ -1,0 +1,94 @@
+# Stage 3 — Code Quality: SonarQube + Quality Gate [MOCKED]
+#
+# Variables de entorno:
+#   Parameter Store  → config no sensible (host, project key)
+#   Secrets Manager  → token de SonarQube (sensible, rota)
+#   PLAINTEXT        → ninguna — todo externalizado
+#
+# NOTA IAM: codebuild-quality-role necesita:
+#   ssm:GetParameters         sobre arn:aws:ssm:<region>:<account>:parameter/meli/config/*
+#   secretsmanager:GetSecretValue sobre arn:aws:secretsmanager:...:secret:/meli/pipeline/sonarqube-token*
+#
+# Para conectar Sonar real: descomentar líneas [PROD], comentar líneas [MOCK].
+# El bloque env no cambia — la interfaz con Parameter Store/Secrets Manager es la misma.
+
+version: 0.2
+
+env:
+  parameter-store:
+    # URL del servidor SonarQube (self-hosted en EKS o SonarCloud)
+    # Para apuntar a otro server: cambiar el valor en Parameter Store, no tocar este YAML
+    SONAR_HOST_URL: /meli/config/sonar-host-url        # Ej: "https://sonarqube.meli.internal"
+    SONAR_PROJECT_KEY: /meli/config/sonar-project-key  # Ej: "meli-devops-api"
+
+  secrets-manager:
+    # Token de SonarQube — sensible, se rota cada 90 días
+    # Nunca como variable de entorno plana, nunca en el YAML
+    SONAR_TOKEN: /meli/pipeline/sonarqube-token
+
+phases:
+  install:
+    runtime-versions:
+      java: corretto21
+    commands:
+      - echo "[INFO] Stage CodeQuality (MOCKED)"
+      - echo "[INFO] Sonar host (Parameter Store): $SONAR_HOST_URL"
+      - echo "[INFO] Project key (Parameter Store): $SONAR_PROJECT_KEY"
+      # SONAR_TOKEN disponible pero nunca se loggea — CodeBuild lo enmascara automáticamente
+      # si viene de secrets-manager
+      # [PROD] Instalar sonar-scanner:
+      # - curl -sSLo /tmp/sonar.zip https://binaries.sonarsource.com/.../sonar-scanner-cli-5.0.1.3006-linux.zip
+      # - unzip -q /tmp/sonar.zip -d /opt/
+      # - export PATH=$PATH:/opt/sonar-scanner-5.0.1.3006-linux/bin
+
+  pre_build:
+    commands:
+      - export COMMIT_SHA_SHORT=$(echo "$CODEBUILD_RESOLVED_SOURCE_VERSION" | cut -c1-7)
+      - echo "[INFO] Analizando commit $COMMIT_SHA_SHORT"
+
+  build:
+    commands:
+      # [PROD] Sonar scan real (descomentar cuando exista el server):
+      # sonar-scanner \
+      #   -Dsonar.host.url=$SONAR_HOST_URL \
+      #   -Dsonar.login=$SONAR_TOKEN \
+      #   -Dsonar.projectKey=$SONAR_PROJECT_KEY \
+      #   -Dsonar.java.binaries=target/classes \
+      #   -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml \
+      #   -Dsonar.qualitygate.wait=true
+      # Con -Dsonar.qualitygate.wait=true el comando bloquea hasta tener resultado.
+      # Si Quality Gate = ERROR → exit code != 0 → pipeline falla automáticamente.
+
+      # [MOCK] Simula el scan con interfaz idéntica a producción
+      - echo "[MOCK] Conectando a $SONAR_HOST_URL..."
+      - sleep 2
+      - echo "[MOCK] Analizando código fuente..."
+      - sleep 2
+      - echo "[MOCK] Verificando OWASP Top 10..."
+      - sleep 1
+
+      # [MOCK] Quality Gate — para testear el fail path: SIMULATE_QG_FAIL=true
+      - |
+        if [ "${SIMULATE_QG_FAIL:-false}" = "true" ]; then
+          echo "[MOCK] Quality Gate ERROR"
+          echo "[FAIL] Coverage on new code: 45% (mínimo: 80%)"
+          echo "[FAIL] Maintainability rating: D (máximo: C)"
+          exit 1
+        else
+          echo "[MOCK] Quality Gate PASSED"
+          echo "[OK] Bugs: 0"
+          echo "[OK] Vulnerabilities: 0"
+          echo "[OK] Code Smells: 12 (threshold: 50)"
+          echo "[OK] Coverage on new code: 87%"
+          echo "[OK] Duplicated lines: 1.2%"
+        fi
+
+  post_build:
+    commands:
+      - echo "[INFO] Code Quality OK a $(date)"
+
+artifacts:
+  files:
+    - '**/*'
+  exclude-paths:
+    - '.git/**/*'

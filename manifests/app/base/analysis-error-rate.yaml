@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: challenge-meli-api-error-rate
+  namespace: challenge-meli
+  labels:
+    app.kubernetes.io/name: challenge-meli-api
+    app.kubernetes.io/part-of: challenge-meli
+spec:
+  args:
+    - name: service
+  metrics:
+    - name: error-rate
+      count: 10
+      interval: 30s
+      failureLimit: 1
+      successCondition: isNaN(result[0]) || result[0] <= 0.01
+      provider:
+        prometheus:
+          address: http://prometheus.monitoring.svc:9090
+          query: |
+            sum(rate(http_server_requests_seconds_count{application="challenge-meli",namespace="challenge-meli",status=~"5.."}[1m]))
+            /
+            clamp_min(sum(rate(http_server_requests_seconds_count{application="challenge-meli",namespace="challenge-meli"}[1m])), 1)

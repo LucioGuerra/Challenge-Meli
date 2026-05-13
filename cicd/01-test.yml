@@ -1,0 +1,80 @@
+# Stage 2 — Unit Tests + Coverage Gate
+#
+# Variables de entorno:
+#   Parameter Store → configuración no sensible (/meli/config/*)
+#   PLAINTEXT       → solo flags técnicas que no varían por ambiente
+#
+# NOTA IAM: codebuild-test-role necesita:
+#   ssm:GetParameters sobre arn:aws:ssm:<region>:<account>:parameter/meli/config/*
+
+version: 0.2
+
+env:
+  parameter-store:
+    # Threshold de cobertura mínima aceptable.
+    # Para cambiarlo: aws ssm put-parameter --name /meli/config/min-coverage --value "80"
+    # El próximo run del pipeline ya lo toma sin tocar este YAML.
+    MIN_COVERAGE: /meli/config/min-coverage
+
+    # Opciones de JVM para Maven. Permite tuning por ambiente sin re-deployar.
+    MAVEN_OPTS: /meli/config/maven-opts
+
+  variables:
+    # PLAINTEXT solo para flags técnicas estables que no son config de negocio
+    DOCKER_BUILDKIT: "1"
+
+phases:
+  install:
+    runtime-versions:
+      java: corretto21
+    commands:
+      - echo "[INFO] Java $(java -version 2>&1)"
+      - echo "[INFO] Maven $(mvn -version)"
+      - echo "[INFO] Coverage mínimo requerido ${MIN_COVERAGE}% (desde /meli/config/min-coverage)"
+
+  pre_build:
+    commands:
+      - export COMMIT_SHA_SHORT=$(echo "$CODEBUILD_RESOLVED_SOURCE_VERSION" | cut -c1-7)
+      - echo "[INFO] Iniciando unit tests para commit $COMMIT_SHA_SHORT"
+
+  build:
+    commands:
+      - mvn -B -fae clean verify
+
+      # Coverage gate — MIN_COVERAGE viene de Parameter Store, no está hardcodeado
+      - |
+        COVERAGE=$(awk -F',' 'NR>1 {covered+=$5; total+=$4+$5} END \
+          {if(total>0) printf "%.0f", (covered/total)*100; else print "0"}' \
+          target/site/jacoco/jacoco.csv)
+        echo "[INFO] Coverage actual: ${COVERAGE}%"
+        echo "[INFO] Coverage mínimo (Parameter Store): ${MIN_COVERAGE}%"
+        if [ "$COVERAGE" -lt "$MIN_COVERAGE" ]; then
+          echo "[FAIL] Coverage ${COVERAGE}% < ${MIN_COVERAGE}%. Bloqueando pipeline."
+          exit 1
+        fi
+        echo "[OK] Coverage gate superado."
+
+  post_build:
+    commands:
+      - echo "[INFO] Unit tests OK a $(date)"
+
+reports:
+  jacoco_report:
+    files:
+      - 'target/site/jacoco/jacoco.xml'
+    file-format: 'JACOCOXML'
+  surefire_report:
+    files:
+      - 'target/surefire-reports/*.xml'
+    file-format: 'JUNITXML'
+
+cache:
+  paths:
+    - '/root/.m2/**/*'
+
+artifacts:
+  files:
+    - '**/*'
+  exclude-paths:
+    - '.git/**/*'
+    - 'target/dependency/**/*'

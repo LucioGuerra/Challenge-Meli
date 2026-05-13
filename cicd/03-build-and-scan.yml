@@ -1,0 +1,146 @@
+# Stage 4 — Docker Build + Trivy Scan + Push ECR
+#
+# Variables de entorno:
+#   Parameter Store → config de ECR y Trivy (no sensibles)
+#   PLAINTEXT       → ninguna — todo externalizado
+#
+# NOTA IAM: codebuild-build-role necesita:
+#   ssm:GetParameters sobre arn:aws:ssm:<region>:<account>:parameter/meli/config/*
+#   ecr:GetAuthorizationToken (resource: *)
+#   ecr:BatchCheckLayerAvailability, ecr:PutImage, etc. sobre el repo específico
+#
+# privileged_mode = true en el CodeBuild project (necesario para Docker daemon)
+#
+# Trivy gate:
+#   TRIVY_BLOCK = true  → severidades de $TRIVY_SEVERITY fallan el build
+#   TRIVY_BLOCK = false → corre el scan, publica reporte, NO bloquea (modo "informativo")
+# Default en este YAML: NO bloqueante hasta que se calibre la baseline de CVEs.
+# Igual el reporte queda como artifact, así que la stage es seguridad real, no teatro.
+
+version: 0.2
+
+env:
+  parameter-store:
+    # Registry de ECR — cambia por account/region
+    # Ej: "123456789.dkr.ecr.us-east-1.amazonaws.com"
+    ECR_REGISTRY: /meli/config/ecr-registry
+
+    # Nombre del repositorio ECR de esta app
+    ECR_REPOSITORY: /meli/config/ecr-repository
+
+    # Región AWS — necesaria para el login a ECR
+    AWS_DEFAULT_REGION: /meli/config/aws-region
+
+    # Severidades que bloquean el pipeline en Trivy
+    # Para bajar el threshold: cambiar a "CRITICAL" en Parameter Store
+    TRIVY_SEVERITY: /meli/config/trivy-severity   # Ej: "HIGH,CRITICAL"
+
+  variables:
+    DOCKER_BUILDKIT: "1"
+    # Default: el scan corre pero NO bloquea el pipeline (exit-code 0).
+    # Para activar el gate: setear TRIVY_BLOCK=true en el environment del CodeBuild project,
+    # o exportarlo desde Parameter Store cuando la baseline de CVEs esté calibrada.
+    TRIVY_BLOCK: "false"
+    TRIVY_VERSION: "0.58.1"
+
+phases:
+  install:
+    runtime-versions:
+      docker: 24
+    commands:
+      - echo "[INFO] Stage BuildAndScan"
+      - echo "[INFO] ECR Registry (Parameter Store): $ECR_REGISTRY"
+      - echo "[INFO] ECR Repository (Parameter Store): $ECR_REPOSITORY"
+      - echo "[INFO] Trivy severity threshold (Parameter Store): $TRIVY_SEVERITY"
+      - echo "[INFO] Trivy blocking mode: $TRIVY_BLOCK"
+
+      # Instalar Trivy desde el release oficial (binario estático, sin apt — funciona en
+      # cualquier base de CodeBuild Standard: AL2023/Ubuntu).
+      - |
+        curl -sfL -o /tmp/trivy.tar.gz \
+          "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+        tar -xzf /tmp/trivy.tar.gz -C /tmp trivy
+        install -m 0755 /tmp/trivy /usr/local/bin/trivy
+        trivy --version
+
+  pre_build:
+    commands:
+      - export COMMIT_SHA_SHORT=$(echo "$CODEBUILD_RESOLVED_SOURCE_VERSION" | cut -c1-7)
+      - export IMAGE_TAG="$COMMIT_SHA_SHORT"
+      - export IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+      - echo "[INFO] Imagen a buildear: $IMAGE_URI"
+
+      # Login a ECR — get-login-password es el método actual (no usar el viejo get-login)
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+
+  build:
+    commands:
+      # Docker build — Dockerfile en raíz del repo (multi-stage definido en el Dockerfile)
+      - echo "[INFO] Buildeando $IMAGE_URI"
+      - docker build --pull -t $IMAGE_URI -f Dockerfile .
+      - echo "[INFO] Build completado"
+
+      # Trivy scan — pre-cache de la DB para no descargarla en cada run.
+      # --ignore-unfixed: no fallar por CVEs sin fix upstream disponible (no podemos hacer nada).
+      # --exit-code: dinámico según TRIVY_BLOCK (gate o informativo).
+      - echo "[INFO] Ejecutando Trivy contra $IMAGE_URI (severity=$TRIVY_SEVERITY, block=$TRIVY_BLOCK)"
+      - |
+        if [ "${TRIVY_BLOCK}" = "true" ]; then
+          TRIVY_EXIT_CODE=1
+          echo "[INFO] Modo bloqueante: severidades $TRIVY_SEVERITY fallan el build"
+        else
+          TRIVY_EXIT_CODE=0
+          echo "[INFO] Modo informativo: el scan corre y publica reporte, no bloquea"
+        fi
+      # Reporte humano (logs de CodeBuild) y reporte JSON (artifact para auditoría / Security Hub).
+      - |
+        trivy image \
+          --severity "$TRIVY_SEVERITY" \
+          --exit-code "$TRIVY_EXIT_CODE" \
+          --no-progress \
+          --ignore-unfixed \
+          --format table \
+          "$IMAGE_URI" | tee trivy-report.txt
+      - |
+        trivy image \
+          --severity "$TRIVY_SEVERITY" \
+          --exit-code 0 \
+          --no-progress \
+          --ignore-unfixed \
+          --format json \
+          --output trivy-report.json \
+          "$IMAGE_URI"
+      - echo "[OK] Trivy scan completado"
+
+      # Push a ECR — sólo se llega acá si Trivy pasó (modo bloqueante)
+      # o siempre (modo informativo, hasta calibrar la baseline).
+      - echo "[INFO] Pushing $IMAGE_URI"
+      - docker push $IMAGE_URI
+
+  post_build:
+    commands:
+      - echo "[OK] Imagen publicada: $IMAGE_URI"
+
+      # imageDetail.json — contrato con el stage siguiente (update-manifests)
+      # El stage de manifests lee IMAGE_TAG y IMAGE_URI de acá, no los recalcula
+      - |
+        cat > imageDetail.json <<EOF
+        {
+          "imageUri": "$IMAGE_URI",
+          "imageTag": "$IMAGE_TAG",
+          "ecrRegistry": "$ECR_REGISTRY",
+          "ecrRepository": "$ECR_REPOSITORY",
+          "commitSha": "$CODEBUILD_RESOLVED_SOURCE_VERSION",
+          "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        }
+        EOF
+      - cat imageDetail.json
+
+artifacts:
+  # imageDetail.json pasa al siguiente stage (update-manifests lo lee).
+  # Los reportes de Trivy se publican como artifacts para auditoría y para alimentar
+  # Security Hub / S3 si se conecta downstream.
+  files:
+    - imageDetail.json
+    - trivy-report.txt
+    - trivy-report.json

@@ -1,0 +1,134 @@
+# Stage 5/7/9 — Update Manifests (GitOps)
+#
+# Reutilizado para dev, test y prod.
+# TARGET_ENV se inyecta como override desde el stage del pipeline — no viene de Parameter Store
+# porque es dinámico por stage, no es config almacenable.
+#
+# Variables de entorno:
+#   Parameter Store  → config del manifest repo y ECR (no sensibles)
+#   Secrets Manager  → GitHub PAT para escribir al manifest repo (sensible)
+#   PLAINTEXT        → TARGET_ENV (override del pipeline, dinámico por stage)
+#
+# NOTA IAM: codebuild-manifests-role necesita:
+#   ssm:GetParameters             sobre /meli/config/*
+#   secretsmanager:GetSecretValue sobre /meli/pipeline/github-manifest-token*
+
+version: 0.2
+
+env:
+  parameter-store:
+    # Org/repo del manifest repo — Ej: "mi-org/meli-devops-manifests"
+    MANIFEST_REPO: /meli/config/manifest-repo
+
+    # Git user para el commit de bump — aparece en el historial del manifest repo
+    GIT_USER_NAME: /meli/config/cicd-git-user-name   # Ej: "MeLi CI/CD Bot"
+    GIT_USER_EMAIL: /meli/config/cicd-git-user-email  # Ej: "cicd-bot@meli.com"
+
+    # ECR — necesario para escribir el repository correcto en values.yaml
+    ECR_REGISTRY: /meli/config/ecr-registry
+    ECR_REPOSITORY: /meli/config/ecr-repository
+
+  secrets-manager:
+    # GitHub PAT con scope: repo (solo el manifest repo).
+    # Se rota cada 90 días via Secrets Manager rotation.
+    # Mejora futura: reemplazar con GitHub App (installation token de 1h, más seguro).
+    GITHUB_TOKEN: /meli/pipeline/github-manifest-token
+
+  variables:
+    # TARGET_ENV no viene de Parameter Store — lo inyecta el pipeline como override por stage.
+    # dev  → Stage DeployDev
+    # test → Stage DeployTest
+    # prod → Stage DeployProd
+    # Default UNSET: falla explícitamente si se ejecuta sin override configurado.
+    TARGET_ENV: "UNSET"
+
+phases:
+  install:
+    commands:
+      - echo "[INFO] Stage UpdateManifests"
+      # yq para manipular YAML de forma segura — no sed (frágil sobre YAML anidado)
+      - wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_amd64
+      - chmod +x /usr/local/bin/yq
+      - yq --version
+
+  pre_build:
+    commands:
+      # Validar TARGET_ENV antes de hacer cualquier cosa
+      - |
+        if [ -z "$TARGET_ENV" ] || [ "$TARGET_ENV" = "UNSET" ]; then
+          echo "[FAIL] TARGET_ENV no está seteado."
+          echo "[FAIL] El stage del pipeline debe pasarlo como EnvironmentVariables override."
+          exit 1
+        fi
+        if [ "$TARGET_ENV" != "dev" ] && [ "$TARGET_ENV" != "test" ] && [ "$TARGET_ENV" != "prod" ]; then
+          echo "[FAIL] TARGET_ENV inválido: '$TARGET_ENV' (esperado: dev|test|prod)"
+          exit 1
+        fi
+        echo "[OK] Target environment: $TARGET_ENV"
+        echo "[INFO] Manifest repo (Parameter Store): $MANIFEST_REPO"
+
+      # Leer el image tag del contrato con el stage anterior
+      - export IMAGE_TAG=$(cat imageDetail.json | python3 -c "import sys,json; print(json.load(sys.stdin)['imageTag'])")
+      - export COMMIT_SHA=$(cat imageDetail.json | python3 -c "import sys,json; print(json.load(sys.stdin)['commitSha'])")
+      - echo "[INFO] Bumpeando imagen a tag: $IMAGE_TAG (commit: $COMMIT_SHA)"
+
+      # Configurar git con valores desde Parameter Store
+      - git config --global user.name "$GIT_USER_NAME"
+      - git config --global user.email "$GIT_USER_EMAIL"
+
+  build:
+    commands:
+      # Clonar el manifest repo — GITHUB_TOKEN viene de Secrets Manager, no se loggea
+      - echo "[INFO] Clonando $MANIFEST_REPO..."
+      - git clone --depth 1 "https://oauth2:${GITHUB_TOKEN}@github.com/${MANIFEST_REPO}.git" manifests
+      - cd manifests
+
+      # Validar que el kustomization.yaml del env existe
+      # Estructura Kustomize: el bump se hace sobre `images[0]` en kustomization.yaml,
+      # no sobre values.yaml. values.yaml contiene solo env vars consumidas por la app.
+      - export KUSTOMIZATION_FILE="manifests/app/environments/${TARGET_ENV}/kustomization.yaml"
+      - |
+        if [ ! -f "$KUSTOMIZATION_FILE" ]; then
+          echo "[FAIL] $KUSTOMIZATION_FILE no existe en el manifest repo."
+          echo "[FAIL] Verificar que el manifest repo tiene la estructura correcta:"
+          echo "[FAIL]   manifests/app/environments/dev/kustomization.yaml"
+          echo "[FAIL]   manifests/app/environments/test/kustomization.yaml"
+          echo "[FAIL]   manifests/app/environments/prod/kustomization.yaml"
+          exit 1
+        fi
+
+      # Bump del tag con yq sobre Kustomize images[] transformer.
+      # Kustomize lee images[].newTag/newName nativamente y los aplica a cualquier
+      # container con `image: <name>:<anytag>` que matchee `images[].name`.
+      - echo "[INFO] Actualizando $KUSTOMIZATION_FILE → images[0].newTag=$IMAGE_TAG"
+      - yq -i ".images[0].newTag = \"$IMAGE_TAG\"" "$KUSTOMIZATION_FILE"
+      - yq -i ".images[0].newName = \"${ECR_REGISTRY}/${ECR_REPOSITORY}\"" "$KUSTOMIZATION_FILE"
+
+      # Verificar que el cambio se aplicó — defensa contra bugs silenciosos en yq
+      - |
+        ACTUAL_TAG=$(yq ".images[0].newTag" "$KUSTOMIZATION_FILE")
+        if [ "$ACTUAL_TAG" != "$IMAGE_TAG" ]; then
+          echo "[FAIL] El bump no se aplicó. Esperado: $IMAGE_TAG, actual: $ACTUAL_TAG"
+          exit 1
+        fi
+        echo "[OK] kustomization.yaml actualizado correctamente"
+
+      # Commit + push
+      # [skip ci] evita que el manifest repo dispare su propio pipeline si tiene uno
+      - |
+        git add "$KUSTOMIZATION_FILE"
+        if git diff --staged --quiet; then
+          echo "[INFO] Sin cambios — la imagen ya estaba en $IMAGE_TAG. Idempotente, continuando."
+          exit 0
+        fi
+        git commit -m "chore(${TARGET_ENV}): bump image to ${IMAGE_TAG} [skip ci]
+
+        Source commit: ${COMMIT_SHA}
+        Environment: ${TARGET_ENV}
+        Triggered by: ${CODEBUILD_BUILD_ID}"
+        git push origin HEAD:main
+
+  post_build:
+    commands:
+      - echo "[OK] Manifest repo actualizado para $TARGET_ENV"
+      - echo "[INFO] ArgoCD detectará el cambio y sincronizará el cluster."
